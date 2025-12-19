@@ -1,0 +1,41 @@
+{
+  "stocks": [
+    {
+      "code": "SZ000685",
+      "name": "中山公用"
+    },
+    {
+      "code": "SH601231",
+      "name": "环旭电子"
+    },
+    {
+      "code": "SZ000617",
+      "name": "中油资本"
+    },
+    {
+      "code": "SZ002251",
+      "name": "步步高"
+    },
+    {
+      "code": "SZ000802",
+      "name": "北京文化"
+    }
+  ],
+  "size_config": {
+    "width": 220,
+    "height": 140,
+    "font_size": 6
+  },
+  "config": {
+    "width": 140,
+    "col1_ratio": 0.3,
+    "col2_ratio": 0.25000000000000006,
+    "col3_ratio": 0.44999999999999996,
+    "font_size": 9,
+    "height": 140,
+    "name_ratio": 0.25,
+    "price_ratio": 0.35,
+    "change_ratio": 0.4,
+    "opacity": 39
+  }
+}

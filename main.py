@@ -78,7 +78,7 @@ class FetchThread(QThread):
                     try:
                         print(f"Fetch: {symbol}...", end=" ", flush=True)
                         ticker = yf.Ticker(symbol)
-                        df = ticker.history(period="5d", interval="5m") 
+                        df = ticker.history(period="1d", interval="1m") 
                         
                         if df is None or df.empty or 'Close' not in df.columns:
                             print("空数据")
@@ -208,7 +208,16 @@ class DesktopWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.move(self.config.get('x', 100), self.config.get('y', 100))
+        self.pos_x = self.config.get('x', 100)
+        self.pos_y = self.config.get('y', 100)
+        if self.pos_x > self.screen().availableGeometry().width():
+            self.pos_x = 0
+        if self.pos_y > self.screen().availableGeometry().height():
+            self.pos_y = 0
+        # self.move(self.config.get('x', 100), self.config.get('y', 100))
+        self.move(self.pos_x, self.pos_y)
+    # 初始化系统托盘图标
+
     def init_tray(self):
         self.tray_icon = QSystemTrayIcon(self)
         icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
