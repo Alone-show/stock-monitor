@@ -9,6 +9,9 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QGridLayout,
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QPainter, QPainterPath, QPen, QAction
 
+import requests  # 需要安装: pip install requests
+import re
+
 # ================= 环境设置 =================
 os.environ["QT_LOGGING_RULES"] = "*.debug=false;qt.qpa.qgnomeplatform=false"
 os.environ["QT_QPA_PLATFORM"] = "xcb"
@@ -19,7 +22,6 @@ CONFIG_FILE = "stock_config.json"
 DEFAULT_CONFIG = {
     "stocks": {
         '000880.SZ': '潍柴动力',
-        'NVDA':      '英伟达',
     },
     "x": 100,
     "y": 100,
@@ -32,7 +34,7 @@ COLOR_FLAT = "#F8F8F2"  # 白
 COLOR_TIME = "#6272A4"  # 时间显示颜色 (灰蓝)
 FONT_NAME = "Noto Sans CJK SC" 
 FONT_SIZE = 11
-REFRESH_INTERVAL = 15 
+REFRESH_INTERVAL = 5
 # ===========================================
 
 class ConfigManager:
@@ -53,6 +55,70 @@ class ConfigManager:
                 json.dump(config, f, indent=4, ensure_ascii=False)
         except: pass
 
+# class FetchThread(QThread):
+#     data_signal = pyqtSignal(dict)
+    
+#     def __init__(self, stock_map):
+#         super().__init__()
+#         self.stock_map = stock_map 
+#         self.running = True
+
+#     def update_map(self, new_map):
+#         self.stock_map = new_map
+
+#     def run(self):
+#         while self.running:
+#             try:
+#                 codes = list(self.stock_map.keys())
+#                 if not codes: time.sleep(2); continue
+                
+#                 print(f"--- 刷新 {time.strftime('%H:%M:%S')} ---")
+                
+#                 result = {}
+#                 # 逐个获取更稳定
+#                 for symbol in codes:
+#                     try:
+#                         print(f"Fetch: {symbol}...", end=" ", flush=True)
+#                         ticker = yf.Ticker(symbol)
+#                         df = ticker.history(period="1d", interval="1m") 
+                        
+#                         if df is None or df.empty or 'Close' not in df.columns:
+#                             print("空数据")
+#                             continue
+                            
+#                         current_price = df['Close'].iloc[-1]
+                        
+#                         # 计算涨跌
+#                         try:
+#                             info = ticker.fast_info
+#                             prev_close = info.previous_close
+#                             if prev_close and prev_close > 0:
+#                                 base_price = prev_close
+#                             else:
+#                                 base_price = df['Close'].iloc[0]
+#                         except:
+#                             base_price = df['Close'].iloc[0]
+
+#                         pct = ((current_price - base_price) / base_price) * 100
+#                         hist_list = df['Close'].tail(30).tolist()
+                        
+#                         result[symbol] = {
+#                             'price': current_price,
+#                             'pct': pct,
+#                             'history': hist_list
+#                         }
+#                         print("OK")
+#                     except Exception as e:
+#                         print(f"Err: {e}")
+
+#                 if result:
+#                     self.data_signal.emit(result)
+
+#             except Exception as e:
+#                 print(f"Network Err: {e}")
+            
+#             time.sleep(REFRESH_INTERVAL)
+
 class FetchThread(QThread):
     data_signal = pyqtSignal(dict)
     
@@ -60,63 +126,91 @@ class FetchThread(QThread):
         super().__init__()
         self.stock_map = stock_map 
         self.running = True
+        # 用于存储每个股票最近获取的价格点，供 Sparkline 使用
+        self.history_cache = {s: [] for s in stock_map.keys()}
 
     def update_map(self, new_map):
         self.stock_map = new_map
+        # 清理不再需要的缓存
+        for s in list(self.history_cache.keys()):
+            if s not in new_map: del self.history_cache[s]
+        for s in new_map:
+            if s not in self.history_cache: self.history_cache[s] = []
 
     def run(self):
         while self.running:
             try:
                 codes = list(self.stock_map.keys())
-                if not codes: time.sleep(2); continue
+                if not codes: 
+                    time.sleep(2)
+                    continue
                 
+                # 转换格式: 000880.SZ -> sz000880 / 600519.SS -> sh600519
+                sina_codes = []
+                for c in codes:
+                    parts = c.split('.')
+                    if len(parts) == 2:
+                        sina_codes.append(f"{parts[1].lower()}{parts[0]}")
+                    else:
+                        sina_codes.append(c.lower())
+
+                # 请求新浪接口
                 print(f"--- 刷新 {time.strftime('%H:%M:%S')} ---")
                 
+                url = f"http://hq.sinajs.cn/list={','.join(sina_codes)}"
+                print(url)
+                # 新浪现在检查 Referer，必须加上
+                headers = {'Referer': 'http://finance.sina.com.cn'}
+                
+                response = requests.get(url, headers=headers, timeout=5)
+                print(f"Status: {response.status_code}")
+                print(f"Length: {len(response.text)}")
+                print(f"Text: ", response.text)
+                response.encoding = 'gbk' # 新浪用的是 GBK 编码
+                
                 result = {}
-                # 逐个获取更稳定
-                for symbol in codes:
-                    try:
-                        print(f"Fetch: {symbol}...", end=" ", flush=True)
-                        ticker = yf.Ticker(symbol)
-                        df = ticker.history(period="1d", interval="1m") 
+                lines = response.text.strip().split('\n')
+                
+                for i, line in enumerate(lines):
+                    # 格式: var hq_str_sz000880="潍柴动力,16.50,16.48,16.55,...";
+                    match = re.search(r'="(.+)"', line)
+                    if not match: continue
+                    
+                    data = match.group(1).split(',')
+                    if len(data) < 4: continue
+                    
+                    symbol = codes[i]
+                    current_price = float(data[3])  # 当前价
+                    prev_close = float(data[2])     # 昨收
+                    
+                    # 如果当前停牌或未开盘，价格可能为0，尝试用昨收
+                    if current_price == 0: current_price = prev_close
+                    
+                    # 计算涨跌幅
+                    pct = 0.0
+                    if prev_close > 0:
+                        pct = ((current_price - prev_close) / prev_close) * 100
+                    
+                    # 更新内存中的历史记录 (用于 Sparkline)
+                    if symbol not in self.history_cache: self.history_cache[symbol] = []
+                    self.history_cache[symbol].append(current_price)
+                    if len(self.history_cache[symbol]) > 40: # 保留最近40个点
+                        self.history_cache[symbol].pop(0)
                         
-                        if df is None or df.empty or 'Close' not in df.columns:
-                            print("空数据")
-                            continue
-                            
-                        current_price = df['Close'].iloc[-1]
-                        
-                        # 计算涨跌
-                        try:
-                            info = ticker.fast_info
-                            prev_close = info.previous_close
-                            if prev_close and prev_close > 0:
-                                base_price = prev_close
-                            else:
-                                base_price = df['Close'].iloc[0]
-                        except:
-                            base_price = df['Close'].iloc[0]
-
-                        pct = ((current_price - base_price) / base_price) * 100
-                        hist_list = df['Close'].tail(30).tolist()
-                        
-                        result[symbol] = {
-                            'price': current_price,
-                            'pct': pct,
-                            'history': hist_list
-                        }
-                        print("OK")
-                    except Exception as e:
-                        print(f"Err: {e}")
+                    result[symbol] = {
+                        'price': current_price,
+                        'pct': pct,
+                        'history': self.history_cache[symbol]
+                    }
 
                 if result:
                     self.data_signal.emit(result)
 
             except Exception as e:
-                print(f"Network Err: {e}")
+                print(f"Fetch Error: {e}")
             
+            # A股实时刷新建议设为 3-5 秒
             time.sleep(REFRESH_INTERVAL)
-
     def stop(self): self.running = False
 
 class ShadowLabel(QLabel):
